@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diagrama — ProjectFlow</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #fff; }
+  #root { width: 100%; height: 100%; }
+
+  /* Loading overlay */
+  #pf-loading {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; background: #f8f5f0;
+    z-index: 9999; gap: 16px; font-family: system-ui, sans-serif;
+  }
+  #pf-loading .spin {
+    width: 40px; height: 40px; border: 3px solid #e4ddd6;
+    border-top-color: #e07050; border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #pf-loading p { font-size: 14px; color: #5c5c58; font-weight: 600; }
+
+  /* Save toast */
+  #pf-toast {
+    position: fixed; bottom: 20px; right: 20px; z-index: 10000;
+    background: #1a1a18; color: #fff; padding: 10px 16px;
+    border-radius: 10px; font-size: 13px; font-weight: 600;
+    font-family: system-ui, sans-serif;
+    opacity: 0; transform: translateY(10px);
+    transition: opacity .25s, transform .25s;
+    pointer-events: none;
+  }
+  #pf-toast.show { opacity: 1; transform: translateY(0); }
+  #pf-toast.ok   { background: #10b981; }
+  #pf-toast.err  { background: #ef4444; }
+
+  /* Toolbar overlay (ProjectFlow save/load) */
+  #pf-toolbar {
+    position: fixed; top: 8px; right: 8px; z-index: 9998;
+    display: flex; gap: 6px; align-items: center;
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(8px);
+    border: 1.5px solid #e4ddd6; border-radius: 10px;
+    padding: 5px 10px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+  }
+  #pf-toolbar button {
+    padding: 5px 12px; border-radius: 7px;
+    font-size: 12px; font-weight: 700; cursor: pointer;
+    border: 1.5px solid transparent; transition: all .12s;
+    font-family: system-ui, sans-serif;
+  }
+  .pf-btn-save  { background: #e07050; color: #fff; border-color: #e07050; }
+  .pf-btn-save:hover  { background: #c85a38; }
+  .pf-btn-save:disabled { opacity: .6; cursor: not-allowed; }
+  .pf-btn-load  { background: #fff; color: #5c5c58; border-color: #d4cfc9; }
+  .pf-btn-load:hover  { background: #f5f0eb; }
+  .pf-save-status { font-size: 11px; color: #8a8a80; font-family: monospace; display: flex; align-items: center; gap: 5px; }
+  .pf-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .pf-dot.saved  { background: #10b981; }
+  .pf-dot.dirty  { background: #f59e0b; }
+  .pf-dot.saving { background: #3b82f6; animation: spin .8s linear infinite; }
+</style>
+</head>
+<body>
+
+<div id="pf-loading">
+  <div class="spin"></div>
+  <p>Carregando Excalidraw…</p><small id="pf-load-hint" style="font-size:11px;color:#aaa;margin-top:4px">Carregando bibliotecas (~2MB na primeira vez)…</small>
+</div>
+
+<div id="pf-toolbar" style="display:none">
+  <div class="pf-save-status">
+    <span class="pf-dot saved" id="pf-dot"></span>
+    <span id="pf-status-lbl">Salvo</span>
+  </div>
+  <button class="pf-btn-load" id="pf-btn-load" onclick="pfLoad()">↓ Carregar</button>
+  <button class="pf-btn-save" id="pf-btn-save" onclick="pfSave()">💾 Salvar</button>
+</div>
+
+<div id="pf-toast"></div>
+<div id="root"></div>
+
+<!--
+  Excalidraw via React + ReactDOM + @excalidraw/excalidraw
+  usando esm.sh como CDN ESM — funciona sem bundler
+-->
+<!--
+  Polyfill para importmap em browsers mais antigos (Safari < 16.4)
+  es-module-shims é leve (8KB gzip) e totalmente transparente nos browsers modernos
+-->
+<script async src="https://ga.jspm.io/npm:es-module-shims@1.8.3/dist/es-module-shims.js"></script>
+
+<script type="importmap">
+{
+  "imports": {
+    "react":            "https://esm.sh/react@18.3.1",
+    "react/jsx-runtime":"https://esm.sh/react@18.3.1/jsx-runtime",
+    "react-dom":        "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "@excalidraw/excalidraw": "https://esm.sh/@excalidraw/excalidraw@0.17.6?bundle&external=react,react-dom"
+  }
+}
+</script>
+
+<script type="module">
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Excalidraw, exportToBlob, serializeAsJSON, restoreElements } from '@excalidraw/excalidraw';
+
+// ── Config (recebida do pai via postMessage ou URL params) ─────────────────
+const params = new URLSearchParams(window.location.search);
+const PID    = params.get('pid') || 'demo';
+const THEME  = params.get('theme') || 'light';
+const LS_KEY = 'pf_excali_' + PID;
+
+// ── Comunicação com o frame pai ────────────────────────────────────────────
+function postToParent(type, payload) {
+  try { window.parent.postMessage({ source: 'pf-diagram', type, payload }, '*'); } catch(e) {}
+}
+
+// ── Componente principal ───────────────────────────────────────────────────
+function DiagramEditor() {
+  const excalidrawRef = useRef(null);
+  const [ready, setReady]   = useState(false);
+  const [theme, setTheme]   = useState(THEME);
+  const [dirty, setDirty]   = useState(false);
+  const autoSaveTimer       = useRef(null);
+
+  // Carrega dados salvos
+  useEffect(() => {
+    if (!ready) return;
+    _loadData();
+  }, [ready]);
+
+  // Recebe mensagens do frame pai (ex: mudança de tema, forçar save)
+  useEffect(() => {
+    const handler = (e) => {
+      const { type, payload } = e.data || {};
+      if (!type || e.data?.source === 'pf-diagram') return;
+      if (type === 'PF_SET_THEME') setTheme(payload);
+      if (type === 'PF_SAVE')      pfSaveFromRef();
+      if (type === 'PF_LOAD')      _loadData();
+      if (type === 'PF_CLEAR')     excalidrawRef.current?.resetScene();
+      if (type === 'PF_LOAD_DATA')  _restoreData(payload);
+      if (type === 'PF_UNDO')       document.dispatchEvent(new KeyboardEvent('keydown', {ctrlKey:true, key:'z', bubbles:true}));
+      if (type === 'PF_REDO')       document.dispatchEvent(new KeyboardEvent('keydown', {ctrlKey:true, key:'y', bubbles:true}));
+      if (type === 'PF_FIT_VIEW')   excalidrawRef.current?.scrollToContent();
+      if (type === 'PF_SELECT_ALL') document.dispatchEvent(new KeyboardEvent('keydown', {ctrlKey:true, key:'a', bubbles:true}));
+      if (type === 'PF_GENERATE')  _generateFromCards(payload?.cards || []);
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [ready]);
+
+  // onChange — marca dirty e agenda autosave
+  const onChange = useCallback((elements, appState, files) => {
+    if (!ready) return;
+    setDirty(true);
+    setSaveStatus('dirty');
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => pfSaveFromRef(true), 2500);
+  }, [ready]);
+
+  // ── Load ──────────────────────────────────────────────────────────────────
+  async function _loadData() {
+    let data = null;
+
+    // 1. Tenta via postMessage (pai envia dados do Supabase)
+    // 2. Fallback localStorage
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw) data = JSON.parse(raw);
+    } catch(e) {}
+
+    if (data?.elements && excalidrawRef.current) {
+      try {
+        excalidrawRef.current.updateScene({
+          elements: restoreElements(data.elements, null),
+          appState: data.appState ? { ...data.appState, theme } : { theme },
+        });
+        if (data.files) {
+          excalidrawRef.current.addFiles(Object.values(data.files));
+        }
+        setSaveStatus('saved');
+        setDirty(false);
+      } catch(e) {
+        console.warn('[PF Diagram] Erro ao restaurar:', e);
+      }
+    }
+
+    postToParent('READY', { pid: PID });
+    document.getElementById('pf-loading').style.display = 'none';
+    document.getElementById('pf-toolbar').style.display  = 'flex';
+  }
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+  async function pfSaveFromRef(silent = false) {
+    const api = excalidrawRef.current;
+    if (!api) return;
+
+    setSaveStatus('saving');
+    const btn = document.getElementById('pf-btn-save');
+    if (btn) btn.disabled = true;
+
+    try {
+      const elements = api.getSceneElements();
+      const appState = api.getAppState();
+      const files    = api.getFiles();
+
+      const payload = {
+        elements: elements.filter(el => !el.isDeleted),
+        appState: {
+          viewBackgroundColor: appState.viewBackgroundColor,
+          gridSize: appState.gridSize,
+          zoom: appState.zoom,
+          scrollX: appState.scrollX,
+          scrollY: appState.scrollY,
+          theme: appState.theme,
+        },
+        files,
+        pid: PID,
+        savedAt: new Date().toISOString(),
+      };
+
+      // Salva no localStorage sempre
+      try { localStorage.setItem(LS_KEY, JSON.stringify(payload)); } catch(e) {}
+
+      // Envia para o pai salvar no Supabase
+      postToParent('SAVE_DATA', { pid: PID, data: payload });
+
+      setDirty(false);
+      setSaveStatus('saved');
+      if (!silent) toast('Diagrama salvo ✓', 'ok');
+
+    } catch(err) {
+      setSaveStatus('dirty');
+      if (!silent) toast('Erro ao salvar: ' + err.message, 'err');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // ── Restore data (from Supabase, sent by parent) ─────────────────────────
+  function _restoreData(data) {
+    if (!data?.elements || !excalidrawRef.current) return;
+    try {
+      excalidrawRef.current.updateScene({
+        elements: restoreElements(data.elements, null),
+        appState: data.appState ? { ...data.appState, theme } : { theme },
+      });
+      if (data.files) excalidrawRef.current.addFiles(Object.values(data.files));
+      setSaveStatus('saved');
+    } catch(e) { console.warn('[PF Diagram] Restore error:', e); }
+  }
+
+  // ── Generate from project cards ───────────────────────────────────────────
+  function _generateFromCards(cards) {
+    const api = excalidrawRef.current; if (!api) return;
+    if (!cards?.length) return;
+
+    const BPMN_COLORS = {
+      esbocar: { bg: '#fff9db', stroke: '#e9c46a' },
+      viabilizar: { bg: '#fff9db', stroke: '#e9c46a' },
+      atribuir: { bg: '#d1fae5', stroke: '#10b981' },
+      executar: { bg: '#dbeafe', stroke: '#3b82f6' },
+      avaliar: { bg: '#fce7f3', stroke: '#ec4899' },
+      corrigir: { bg: '#fee2e2', stroke: '#ef4444' },
+      validar_cliente: { bg: '#ede9fe', stroke: '#7c3aed' },
+      concluido: { bg: '#d1fae5', stroke: '#059669' },
+    };
+
+    const elements = [];
+    const COL_W = 220, COL_H = 90, PAD_X = 40, PAD_Y = 30;
+    const ORDER = ['esbocar','viabilizar','atribuir','executar','avaliar','corrigir','validar_cliente','concluido'];
+    const byBpmn = {};
+    cards.forEach(c => {
+      const b = c.bpmn || c.bpmn_status || 'esbocar';
+      (byBpmn[b] = byBpmn[b] || []).push(c);
+    });
+
+    let xi = 60;
+    ORDER.forEach(bpmn => {
+      const group = byBpmn[bpmn]; if (!group?.length) return;
+      const colors = BPMN_COLORS[bpmn] || { bg: '#f0f0f0', stroke: '#888' };
+      let yi = 60;
+      group.forEach((c, i) => {
+        const id = 'gen_' + c.id + '_' + i;
+        elements.push({
+          type: 'rectangle',
+          id,
+          x: xi, y: yi,
+          width: COL_W, height: COL_H,
+          backgroundColor: colors.bg,
+          strokeColor: colors.stroke,
+          fillStyle: 'solid',
+          strokeWidth: 2,
+          roughness: 1,
+          opacity: 100,
+          roundness: { type: 3 },
+        });
+        elements.push({
+          type: 'text',
+          id: id + '_t',
+          x: xi + 10, y: yi + (COL_H / 2) - 16,
+          width: COL_W - 20, height: 32,
+          text: (c.title || '').slice(0, 30) + ((c.title||'').length > 30 ? '…' : ''),
+          fontSize: 14, fontFamily: 1,
+          textAlign: 'center',
+          verticalAlign: 'middle',
+          strokeColor: '#1a1a18',
+          backgroundColor: 'transparent', fillStyle: 'solid',
+          opacity: 100, roughness: 1,
+        });
+        // Arrow to next item in column
+        if (i < group.length - 1) {
+          elements.push({
+            type: 'arrow',
+            id: id + '_arr',
+            x: xi + COL_W/2, y: yi + COL_H,
+            width: 0, height: PAD_Y,
+            points: [[0,0],[0,PAD_Y]],
+            strokeColor: colors.stroke,
+            strokeWidth: 2, roughness: 1, opacity: 100,
+            startArrowhead: null, endArrowhead: 'arrow',
+          });
+        }
+        yi += COL_H + PAD_Y;
+      });
+      xi += COL_W + PAD_X;
+    });
+
+    api.updateScene({ elements });
+    toast('Diagrama gerado com ' + cards.length + ' tarefas!', 'ok');
+    setDirty(true);
+  }
+
+  return React.createElement(Excalidraw, {
+    ref: excalidrawRef,
+    theme,
+    langCode: 'pt-BR',
+    UIOptions: {
+      canvasActions: {
+        saveToActiveFile: false,
+        saveAsImage: true,
+        loadScene: false,
+        export: { saveFileToDisk: true },
+      },
+      tools: { image: true },
+    },
+    initialData: {
+      appState: {
+        theme,
+        viewBackgroundColor: theme === 'dark' ? '#1a1a18' : '#f8f5f0',
+        gridSize: null,
+        zoom: { value: 1 },
+      },
+    },
+    onChange,
+    onMount: (api) => {
+      excalidrawRef.current = api;
+      setReady(true);
+    },
+    renderTopRightUI: () => null, // usamos nosso toolbar customizado
+  });
+}
+
+// ── Helpers globais (usados pelos botões do toolbar) ──────────────────────
+window.pfSave = () => {
+  window.dispatchEvent(new MessageEvent('message', { data: { type: 'PF_SAVE' } }));
+};
+window.pfLoad = () => {
+  window.dispatchEvent(new MessageEvent('message', { data: { type: 'PF_LOAD' } }));
+};
+
+function setSaveStatus(state) {
+  const dot = document.getElementById('pf-dot');
+  const lbl = document.getElementById('pf-status-lbl');
+  const map  = { saved:'saved', dirty:'dirty', saving:'saving' };
+  if (dot) dot.className = 'pf-dot ' + (map[state] || 'dirty');
+  if (lbl) lbl.textContent = { saved:'Salvo', dirty:'Não salvo', saving:'Salvando…' }[state] || state;
+}
+window.setSaveStatus = setSaveStatus;
+
+let toastTimer;
+function toast(msg, type = '') {
+  const el = document.getElementById('pf-toast');
+  if (!el) return;
+  clearTimeout(toastTimer);
+  el.textContent = msg;
+  el.className = 'show' + (type ? ' ' + type : '');
+  el.id = 'pf-toast';
+  el.className = 'show ' + (type||'');
+  toastTimer = setTimeout(() => { el.className = ''; }, 3200);
+}
+window.pfToast = toast;
+
+// ── Mount React ───────────────────────────────────────────────────────────
+const root = createRoot(document.getElementById('root'));
+root.render(React.createElement(DiagramEditor));
+</script>
+</body>
+</html>

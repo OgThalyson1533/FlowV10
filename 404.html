@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script>
+  // GitHub Pages SPA redirect trick
+  // Redireciona /qualquer-rota para /?p=/qualquer-rota
+  // para que o index.html possa processar
+  var l = window.location;
+  l.replace(
+    l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+    l.pathname.split('/').slice(0, 1).join('/') +
+    '/?p=' + encodeURIComponent(l.pathname.slice(1) + l.search) +
+    l.hash
+  );
+</script>
+</head>
+<body></body>
+</html>
