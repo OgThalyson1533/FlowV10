@@ -6,8 +6,9 @@
 <title>ProjectFlow V10 — Gestão de Projetos com IA</title>
 <meta name="description" content="ProjectFlow V10 — Kanban · Wiki · Diagramas · AI Doc Engine · Supabase">
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- Supabase -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.js"></script>
 <!-- CSS -->
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/app.css">
@@ -87,6 +88,19 @@
     <div class="login-group">
       <label class="login-label">Anon / Public Key</label>
       <input class="login-input" id="cfg-key" type="text" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6...">
+    </div>
+    <div style="margin:14px 0 4px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08)">
+      <div style="font-size:12px;font-weight:700;color:var(--ac);margin-bottom:6px">✦ Módulo de IA (opcional)</div>
+      <div style="font-size:11px;color:var(--tx-3);margin-bottom:10px;line-height:1.6">
+        Cole a API Key da IA para ativar a geração de documentos com IA.<br>
+        Suportado: <strong>Anthropic</strong> (<code>sk-ant-...</code>) ou <strong>OpenAI</strong> (<code>sk-...</code>).<br>
+        A chave é salva apenas no seu navegador (localStorage).
+      </div>
+      <label class="login-label">API Key da IA</label>
+      <input class="login-input" id="cfg-ai-key" type="password"
+        placeholder="sk-ant-... ou sk-..."
+        autocomplete="off"
+        style="font-family:var(--mono);letter-spacing:0.5px">
     </div>
     <button class="btn-cfg-save" onclick="saveConfig()">Salvar configuração</button>
   </div>
@@ -229,25 +243,20 @@
     </div>
 
     <!-- ════ DIAGRAMA ════ -->
-    <div class="view" id="view-diagram">
-      <div class="kanban-toolbar">
-        <div class="kanban-title-block">
-          <div class="kanban-board-title">Editor de Diagramas</div>
-          <div class="kanban-board-sub" id="diagram-project-badge">Selecione um projeto para vincular o diagrama</div>
-        </div>
-        <div class="toolbar-space"></div>
-        <button class="pill accent" onclick="initDiagramView()">⬡ Iniciar Editor</button>
-      </div>
-      <div id="dg-container" style="flex:1;overflow:hidden;display:flex;flex-direction:column;position:relative">
-        <div id="dg-empty-state" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:18px">
+    <!-- ════ DIAGRAMA ════ -->
+    <div class="view" id="view-diagram" style="flex-direction:column">
+      <!-- dg-container ocupa 100% da view — o engine injeta seu próprio toolbar interno -->
+      <div id="dg-container" style="flex:1;overflow:hidden;display:flex;flex-direction:column;position:relative;min-height:0">
+        <div id="dg-empty-state" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:18px;background:var(--bg-0)">
           <div style="width:72px;height:72px;border-radius:20px;background:var(--ac-bg);display:flex;align-items:center;justify-content:center;font-size:32px">⬡</div>
           <div style="text-align:center">
-            <p style="font-size:17px;font-weight:800;color:var(--tx-1);margin-bottom:8px">Editor de Diagramas — Fabric.js</p>
-            <p style="font-size:13px;color:var(--tx-3);line-height:1.7;max-width:380px">Selecione um projeto no Kanban, depois clique em "⬡ Iniciar Editor" ou no botão Diagrama da toolbar.</p>
+            <p style="font-size:17px;font-weight:800;color:var(--tx-1);margin-bottom:8px">Editor de Diagramas</p>
+            <p style="font-size:13px;color:var(--tx-3);line-height:1.7;max-width:380px">Selecione um projeto no Kanban e volte aqui, ou clique em Iniciar Editor.</p>
+            <p style="font-size:11px;color:var(--tx-4);margin-top:6px" id="diagram-project-badge">Nenhum projeto selecionado</p>
           </div>
           <div style="display:flex;gap:8px">
             <button class="btn-primary" onclick="initDiagramView()">⬡ Iniciar Editor</button>
-            <button class="btn-secondary" onclick="switchView('kanban',document.getElementById('nav-kanban'))">← Ir ao Kanban</button>
+            <button class="btn-secondary" onclick="switchView('kanban',document.getElementById('nav-kanban'))">← Kanban</button>
           </div>
         </div>
       </div>
@@ -506,8 +515,8 @@
 <!-- 6. Módulos IA e Knowledge Base -->
 <script src="js/ai-doc-engine.js"></script>
 <script src="js/knowledge-base.js"></script>
-<!-- 7. Excalidraw roda em diagram.html (iframe) — Fabric.js não é mais necessário -->
-<!-- 8. Engine de diagramas V9 (Fabric.js — save/load correto, sem tela preta) -->
+<!-- 7. Fabric.js — engine do canvas de diagramas -->
+<!-- 8. Engine de diagramas (Fabric.js — save/load via SELECT+UPDATE/INSERT) -->
 <script src="js/diagram-engine-v9.js"></script>
 <!-- 9. Upload de anexos via Supabase Storage -->
 <script src="js/diagrama.js"></script>
